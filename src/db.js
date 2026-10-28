@@ -32,6 +32,11 @@ async function createPool() {
   return pool;
 }
 
+/** Close a pool later, not now: other requests may still be using it. */
+function closeLater(promise) {
+  promise.then((p) => { setTimeout(() => p.close().catch(() => {}), 30000).unref(); }).catch(() => {});
+}
+
 /** Shared pool; rebuilt shortly before its access token expires. */
 async function getPool() {
   if (!poolPromise || Date.now() > poolExpiresAt) {
@@ -40,16 +45,19 @@ async function getPool() {
       poolPromise = null;
       throw err;
     });
-    if (old) old.then((p) => p.close()).catch(() => {});
+    if (old) closeLater(old);
   }
   return poolPromise;
 }
 
-/** Forget the shared pool (it holds a dead connection); the next call builds a fresh one. */
-function dropPool() {
-  const old = poolPromise;
+/**
+ * Forget a pool that holds a dead connection, but only if it is still the shared one:
+ * if another request already replaced it, leave the new pool alone.
+ */
+function dropPool(used) {
+  if (!used || poolPromise !== used) return;
   poolPromise = null;
-  if (old) old.then((p) => p.close()).catch(() => {});
+  closeLater(used);
 }
 
 /**
@@ -57,12 +65,14 @@ function dropPool() {
  * Retries while the paused free-tier database wakes up.
  */
 async function query(text, params = {}) {
+  let used = null;
   return withRetry(async () => {
-    const pool = await getPool();
+    used = getPool();
+    const pool = await used;
     const req = pool.request();
     for (const [name, [type, value]] of Object.entries(params)) req.input(name, type, value);
     return req.query(text);
-  }, { onRetry: (err) => { console.warn('database not ready, retrying:', err.message.slice(0, 120)); dropPool(); } });
+  }, { onRetry: (err) => { console.warn('database not ready, retrying:', err.message.slice(0, 120)); dropPool(used); } });
 }
 
 module.exports = { sql, getPool, query };

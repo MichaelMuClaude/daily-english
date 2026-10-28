@@ -65,6 +65,7 @@ Spoken style rules:
 - It must make sense to someone who has NOT read the story: no unexplained names of people, companies or small places; say "a chef", "some towns", "the government" instead. Aim for a point the learner could really use in their own conversations.
 - No headline grammar, no formal words (such as "announced", "commenced", "statistics"), no long numbers: say "almost 25%" or "a lot more".
 Content rules:
+- Every sentence must be grammatically correct, complete spoken English. Re-read each one: after "Did you hear" you need "that" and a full clause ("Did you hear that women in a coastal town ran a workshop?").
 - Base each sentence on facts from the story text; do not invent facts. Use your own words; never copy a sentence from the story.
 - Avoid crime, violence, death, disasters and party politics. Prefer Perth and Western Australia; if a story is from another state, name the state.
 Then give a natural, spoken Chinese (Simplified) translation, not a word-for-word one.

@@ -7,6 +7,8 @@ test('isTransient recognises a waking database and ordinary network drops, but n
   assert.ok(isTransient(new Error("Database 'db' on server 's' is not currently available.")));
   assert.ok(isTransient(Object.assign(new Error('x'), { number: 40613 })));
   assert.ok(isTransient(Object.assign(new Error('x'), { code: 'ELOGIN' })));
+  assert.ok(isTransient(new Error('aborted')));            // the pool was closed under a running request
+  assert.ok(isTransient(Object.assign(new Error('Canceled.'), { code: 'ECANCEL' })));
   assert.ok(!isTransient(Object.assign(new Error('Violation of UNIQUE KEY'), { number: 2627 })));
   assert.ok(!isTransient(new Error('Incorrect syntax near x')));
   assert.ok(!isTransient(null));
