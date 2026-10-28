@@ -1,6 +1,6 @@
 # Daily English
 
-Learn three everyday English sentences a day, one at a time, on your phone. An LLM reads the full text of the day's Perth news stories and writes each sentence in **spoken** English (contractions, "Did you hear...", phrasal verbs) with a Chinese translation and a Chinese explanation of the hard words and phrases. After the new sentences, old ones come back on a spaced schedule (1, 3, 7, 14, 30 days): you see the Chinese, **type the English yourself**, and the LLM marks your answer and explains the difference. One flow, no tabs: new first, then reviews, then "all done".
+Learn three everyday English sentences a day, one at a time, on your phone. An LLM reads the full text of the day's Perth news stories and writes each sentence in **spoken** English (contractions, "Did you hear...", phrasal verbs) with a Chinese translation and a Chinese explanation of the hard words and phrases. After the new sentences, old ones come back on a spaced schedule (1, 3, 7, 14, 30 days): you see the Chinese, **type the English yourself**, and the LLM marks your answer and explains the difference. At most 10 reviews are shown per day (most overdue first; the rest wait for tomorrow), and a sentence you answer correctly in the last box is retired, so the daily workload stays flat. One flow, no tabs: new first, then reviews, then "all done".
 
 Built to run on Azure with no passwords anywhere:
 
