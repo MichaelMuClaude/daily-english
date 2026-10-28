@@ -1,0 +1,18 @@
+{
+  "name": "daily-english",
+  "version": "0.1.0",
+  "description": "Learn three everyday English sentences a day, taken from local news, with spaced review judged by an LLM.",
+  "license": "MIT",
+  "main": "src/server.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "express": "^4.21.0",
+    "fast-xml-parser": "^4.5.0",
+    "mssql": "^11.0.1"
+  }
+}

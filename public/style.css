@@ -1,0 +1,34 @@
+:root {
+  --bg: #fafaf7; --fg: #1d2330; --muted: #5d6573; --card: #ffffff; --line: #dcdfe6;
+  --accent: #1f6feb; --accent-fg: #ffffff; --good: #1a7f37; --bad: #b42318;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171f; --fg: #e8eaf0; --muted: #a0a7b5; --card: #1d212c; --line: #323848; --accent: #5b9bff; --accent-fg: #0b1220; --good: #4cc26a; --bad: #ff8a80; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 16px; border-bottom: 1px solid var(--line); }
+h1 { font-size: 1.25rem; margin: 0; }
+nav { display: flex; gap: 8px; }
+.who { margin-left: auto; color: var(--muted); font-size: 0.9rem; }
+.who a { color: var(--accent); }
+main { max-width: 720px; margin: 0 auto; padding: 16px; }
+.tab { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; color: var(--fg); font: inherit; cursor: pointer; }
+.tab.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.badge { background: var(--bad); color: #fff; border-radius: 999px; padding: 0 7px; font-size: 0.8rem; margin-left: 4px; }
+.hint { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 12px 0; }
+.en { font-size: 1.15rem; margin: 0 0 4px; }
+.zh { margin: 0 0 8px; color: var(--muted); }
+.zh.big { font-size: 1.3rem; color: var(--fg); }
+.meta { font-size: 0.85rem; color: var(--muted); }
+.meta a { color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 8px; padding: 8px 18px; font: inherit; cursor: pointer; margin-top: 8px; }
+button:disabled { opacity: 0.55; cursor: default; }
+textarea { width: 100%; font: inherit; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+.message { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.message.error { border-color: var(--bad); color: var(--bad); }
+.ref { color: var(--muted); }
+.good { color: var(--good); } .bad { color: var(--bad); }
+.done { color: var(--muted); text-align: center; padding: 32px 0; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }

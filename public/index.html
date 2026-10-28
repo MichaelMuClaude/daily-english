@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily English</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Daily English</h1>
+    <nav>
+      <button id="tab-today" class="tab active" type="button">Today</button>
+      <button id="tab-review" class="tab" type="button">Review <span id="due-badge" class="badge" hidden></span></button>
+    </nav>
+    <div class="who"><span id="who"></span> <a href="/.auth/logout">Sign out</a></div>
+  </header>
+
+  <main>
+    <p id="message" class="message" role="status" hidden></p>
+
+    <section id="view-today">
+      <p class="hint">Three sentences from today's Perth news, in everyday English. Read them, say them aloud, then press <b>Got it</b>. They come back for review later.</p>
+      <div id="cards"></div>
+    </section>
+
+    <section id="view-review" hidden>
+      <div id="review-empty" hidden>
+        <p class="done">Nothing to review right now. Learn today's sentences, then come back tomorrow.</p>
+      </div>
+      <div id="review-card" hidden>
+        <p class="hint">Write this sentence in English.</p>
+        <p id="review-zh" class="zh big"></p>
+        <textarea id="answer" rows="3" maxlength="300" placeholder="Type the English sentence"></textarea>
+        <button id="submit" type="button" class="primary">Check</button>
+        <div id="result" hidden>
+          <p><b id="score"></b></p>
+          <p id="feedback"></p>
+          <p class="ref">Original: <span id="original"></span></p>
+          <button id="next" type="button" class="primary">Next</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
