@@ -3,6 +3,7 @@
 // DefaultAzureCredential falls back to `az login`.
 const sql = require('mssql');
 const { DefaultAzureCredential } = require('@azure/identity');
+const { withRetry } = require('./retry');
 
 const credential = new DefaultAzureCredential({
   managedIdentityClientId: process.env.AZURE_CLIENT_ID || undefined,
@@ -44,12 +45,24 @@ async function getPool() {
   return poolPromise;
 }
 
-/** Run a query with named parameters: query('SELECT ... @id', { id: [sql.Int, 5] }). */
+/** Forget the shared pool (it holds a dead connection); the next call builds a fresh one. */
+function dropPool() {
+  const old = poolPromise;
+  poolPromise = null;
+  if (old) old.then((p) => p.close()).catch(() => {});
+}
+
+/**
+ * Run a query with named parameters: query('SELECT ... @id', { id: [sql.Int, 5] }).
+ * Retries while the paused free-tier database wakes up.
+ */
 async function query(text, params = {}) {
-  const pool = await getPool();
-  const req = pool.request();
-  for (const [name, [type, value]] of Object.entries(params)) req.input(name, type, value);
-  return req.query(text);
+  return withRetry(async () => {
+    const pool = await getPool();
+    const req = pool.request();
+    for (const [name, [type, value]] of Object.entries(params)) req.input(name, type, value);
+    return req.query(text);
+  }, { onRetry: (err) => { console.warn('database not ready, retrying:', err.message.slice(0, 120)); dropPool(); } });
 }
 
 module.exports = { sql, getPool, query };
