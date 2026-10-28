@@ -30,7 +30,9 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
     if (!generating) {
       generating = (async () => {
         const headlines = await news.fetchHeadlines();
-        const items = await llm.generateSentences(headlines);
+        const picks = await llm.pickStories(headlines);
+        const stories = await news.loadStories(picks.map((i) => headlines[i]));
+        const items = await llm.generateSentences(stories);
         await repo.saveSentences(day, items);
       })().finally(() => { generating = null; });
     }

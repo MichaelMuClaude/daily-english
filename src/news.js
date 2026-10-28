@@ -3,8 +3,9 @@
 const { XMLParser } = require('fast-xml-parser');
 
 const FEEDS = [
+  { name: 'ABC WA', url: 'https://www.abc.net.au/news/feed/13891526/rss.xml' }, // the ABC Perth page's "WA News" collection
   { name: 'WAtoday', url: 'https://www.watoday.com.au/rss/feed.xml' },
-  { name: 'ABC News', url: 'https://www.abc.net.au/news/feed/51120/rss.xml' },
+  { name: 'ABC National', url: 'https://www.abc.net.au/news/feed/51120/rss.xml' },
 ];
 
 const parser = new XMLParser({ ignoreAttributes: true, processEntities: true });
@@ -46,4 +47,66 @@ async function fetchHeadlines({ feeds = FEEDS, perFeed = 25, fetchImpl = fetch }
   return items;
 }
 
-module.exports = { FEEDS, parseRss, fetchHeadlines };
+// ---------- full article text ----------
+// The text is read only to let the LLM write its own sentences. It is never stored or logged.
+const ARTICLE_HOSTS = /(^|\.)(abc\.net\.au|watoday\.com\.au)$/i;
+const MAX_ARTICLE_CHARS = 6000;
+const MIN_ARTICLE_CHARS = 400; // shorter than this = paywall stub, video page or error page
+
+function decodeEntities(t) {
+  return t
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** Pull the readable paragraphs out of an article page. Returns '' when nothing usable is found. */
+function extractArticleText(html) {
+  let h = String(html)
+    .replace(/<(script|style|nav|header|footer|aside|noscript|figure|figcaption|form|button)\b[\s\S]*?<\/\1>/gi, ' ');
+  const article = h.match(/<article\b[\s\S]*?<\/article>/i);
+  if (article) h = article[0];
+  const paras = [...h.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim())
+    .map((p) => p.replace(/^Advertisement\s*/i, ''))
+    .filter((p) => p.length >= 40
+      && !/^(More from|Read more|Related|Sign up|Subscribe|Follow )/i.test(p)
+      && !p.includes('{"@')
+      && !/\((Supplied|ABC News|Reuters|AAP|Getty)[^)]*\)$/i.test(p));
+  let out = '';
+  for (const p of paras) {
+    if (out.length + p.length > MAX_ARTICLE_CHARS) break;
+    out += (out ? '\n' : '') + p;
+  }
+  return out;
+}
+
+/** Fetch one article's text; null if the host is not allowed, the page is blocked or too short. */
+async function fetchArticleText(url, { fetchImpl = fetch } = {}) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.protocol !== 'https:' || !ARTICLE_HOSTS.test(u.hostname)) return null;
+  try {
+    const res = await fetchImpl(u.href, {
+      headers: { 'User-Agent': 'daily-english/0.1 (learning app; reads a story to write its own sentences)' },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    if (res.url && !ARTICLE_HOSTS.test(new URL(res.url).hostname)) return null; // redirected somewhere else
+    const text = extractArticleText((await res.text()).slice(0, 3_000_000));
+    return text.length >= MIN_ARTICLE_CHARS ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Add `text` (full article, or '' when unavailable) to each story. Stories with text come first. */
+async function loadStories(stories, { fetchImpl = fetch } = {}) {
+  const withText = await Promise.all(
+    stories.map(async (st) => ({ ...st, text: (await fetchArticleText(st.url, { fetchImpl })) || '' })),
+  );
+  return [...withText.filter((x) => x.text), ...withText.filter((x) => !x.text)];
+}
+
+module.exports = { FEEDS, parseRss, fetchHeadlines, extractArticleText, fetchArticleText, loadStories };

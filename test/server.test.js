@@ -18,8 +18,12 @@ function fakes() {
     async recordReview(u, s, answer, j) { state.reviews.push({ u, id: s.id, answer, j }); return { box: 2, nextReview: '2026-10-31' }; },
     async stats() { return { learned: 0, reviews: 0, correct: 0 }; },
   };
-  const news = { async fetchHeadlines() { return [{ title: 'T', summary: '', url: 'https://e.com' }]; } };
+  const news = {
+    async fetchHeadlines() { return [{ title: 'T', summary: '', url: 'https://e.com' }]; },
+    async loadStories(h) { return h.map((x) => ({ ...x, text: 'full text' })); },
+  };
   const llm = {
+    async pickStories() { return [0]; },
     async generateSentences() { state.genCalls++; await new Promise((r) => setTimeout(r, 20)); return [1, 2, 3].map((i) => ({ english: `Sentence number ${i} is here today.`, chinese: `句子${i}`, topic: 't', sourceTitle: 'T', sourceUrl: 'https://e.com' })); },
     async judgeAnswer() { state.judgeCalls++; return { score: 90, correct: true, feedback: 'good', corrected: 'x' }; },
   };
