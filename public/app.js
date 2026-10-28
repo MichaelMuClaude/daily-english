@@ -55,11 +55,18 @@ function listenButton(text) {
   const b = el('button', 'listen', '🔊 Listen');
   b.type = 'button';
   b.setAttribute('aria-label', 'Listen to the sentence');
+  const reset = () => { b.textContent = '🔊 Listen'; b.disabled = false; };
   b.addEventListener('click', () => {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'en-AU';
     u.rate = 0.9;
+    // Some devices have no English voice installed: say so instead of staying silent.
+    u.onerror = (e) => {
+      if (e.error === 'canceled' || e.error === 'interrupted') return;
+      b.textContent = '🔇 No voice on this device';
+      setTimeout(reset, 4000);
+    };
     window.speechSynthesis.speak(u);
   });
   return b;
