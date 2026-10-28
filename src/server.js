@@ -150,20 +150,28 @@ function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap 
     if (!allowTranscription(req.userId)) {
       return res.status(429).json({ error: 'Too many recordings this hour. Take a break and come back later.' });
     }
-    let heard;
+    let alternatives;
     try {
-      heard = await speech.transcribe(req.body);
+      alternatives = [].concat(await speech.transcribe(req.body)); // the recogniser's best guesses, most likely first
     } catch (err) {
       console.error('speech-to-text failed:', err.message);
       return res.status(503).json({ error: 'The listener is not available right now. Please try again.' });
     }
-    const result = compare(row.english, heard);
-    const out = { heard, score: result.score, passed: result.passed };
-    if (stage === 'read') out.words = result.words; // the English is on screen during this step anyway
-    if (stage === 'recall' && result.passed) {
-      await repo.markLearned(req.userId, id, perthDay(now()));
-      out.learned = true;
-      out.original = row.english;
+    // Recognisers often mishear a word. Judge the learner by the guess closest to the sentence they were saying.
+    let heard = alternatives[0] ?? '';
+    let result = compare(row.english, heard);
+    for (const alt of alternatives.slice(1)) {
+      const r = compare(row.english, alt);
+      if (r.score > result.score) { heard = alt; result = r; }
+    }
+    const out = { heard, score: result.score, passed: result.passed, words: result.words, notes: result.notes };
+    if (stage === 'recall') {
+      // After a real try the learner needs to see what the sentence was. Silence earns no peek.
+      if (heard) out.original = row.english;
+      if (result.passed) {
+        await repo.markLearned(req.userId, id, perthDay(now()));
+        out.learned = true;
+      }
     }
     res.json(out);
   });

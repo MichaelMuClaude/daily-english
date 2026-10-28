@@ -48,8 +48,13 @@ const sttFetch = (capture, body, status = 200) => async (url, opts) => {
 test('transcribe sends the WAV with an Entra bearer token (no key) and returns the recognised text', async () => {
   const cap = {};
   const wav = Buffer.from('RIFFxxxx');
-  const text = await transcribe(wav, { fetchImpl: sttFetch(cap, { RecognitionStatus: 'Success', DisplayText: 'Hello there.' }), getToken: async () => 'TOKEN123', env });
-  assert.equal(text, 'Hello there.');
+  const alternatives = await transcribe(wav, {
+    fetchImpl: sttFetch(cap, { RecognitionStatus: 'Success', NBest: [{ Display: 'Hello there.' }, { Display: 'Hello their.' }, { Display: '' }] }),
+    getToken: async () => 'TOKEN123',
+    env,
+  });
+  assert.deepEqual(alternatives, ['Hello there.', 'Hello their.']);
+  assert.match(cap.url, /format=detailed/);
   assert.match(cap.url, /^https:\/\/example\.cognitiveservices\.azure\.com\/stt\/speech\/recognition\/conversation\/cognitiveservices\/v1\?language=en-AU/);
   assert.equal(cap.opts.headers.Authorization, 'Bearer TOKEN123');
   assert.match(cap.opts.headers['Content-Type'], /audio\/wav.*samplerate=16000/);
@@ -57,9 +62,14 @@ test('transcribe sends the WAV with an Entra bearer token (no key) and returns t
   assert.doesNotMatch(JSON.stringify(cap.opts.headers), /Ocp-Apim|api-key/i);
 });
 
-test('transcribe returns empty text when nothing clear was heard, and throws when the service fails', async () => {
+test('transcribe falls back to DisplayText when there is no alternatives list', async () => {
+  const out = await transcribe(Buffer.alloc(10), { fetchImpl: sttFetch({}, { RecognitionStatus: 'Success', DisplayText: 'Hi.' }), getToken: async () => 't', env });
+  assert.deepEqual(out, ['Hi.']);
+});
+
+test('transcribe returns an empty list when nothing clear was heard, and throws when the service fails', async () => {
   for (const RecognitionStatus of ['NoMatch', 'InitialSilenceTimeout']) {
-    assert.equal(await transcribe(Buffer.alloc(10), { fetchImpl: sttFetch({}, { RecognitionStatus }), getToken: async () => 't', env }), '');
+    assert.deepEqual(await transcribe(Buffer.alloc(10), { fetchImpl: sttFetch({}, { RecognitionStatus }), getToken: async () => 't', env }), []);
   }
   await assert.rejects(transcribe(Buffer.alloc(10), { fetchImpl: sttFetch({}, { error: 'x' }, 401), getToken: async () => 't', env }), /HTTP 401/);
   await assert.rejects(transcribe(Buffer.alloc(10), { fetchImpl: sttFetch({}, { RecognitionStatus: 'Error' }), getToken: async () => 't', env }), /status Error/);

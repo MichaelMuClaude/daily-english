@@ -328,16 +328,28 @@ test('read aloud: the heard text is compared with the sentence, wrong words are 
   assert.equal((await (await sendWav(base, '/api/learn/read?sentenceId=1')).json()).passed, false);
 });
 
-test('say it from memory: a failed attempt does not reveal the English and does not mark the sentence learned', async () => {
+test('say it from memory: a failed attempt shows the original and what went wrong, but does not mark the sentence learned', async () => {
   const f = fakes();
   const base = await startRaw(f);
   await raw(base, '/api/next');
   f.state.heard = 'I do not remember';
-  const r = await sendWav(base, '/api/learn/recall?sentenceId=2');
-  const text = await r.text();
-  assert.equal(JSON.parse(text).passed, false);
-  assert.doesNotMatch(text, /Sentence number/); // the answer stays hidden
+  const j = await (await sendWav(base, '/api/learn/recall?sentenceId=1')).json();
+  assert.equal(j.passed, false);
+  assert.equal(j.learned, undefined);
+  assert.equal(j.original, 'Sentence number 1 is here today.');
+  assert.ok(j.notes.length > 0);
   assert.equal(f.state.learned.size, 0);
+});
+
+test('the recogniser\'s alternatives are tried and the one closest to the sentence is used', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = ['Sentence number won is hear today', 'Sentence number 1 is here today.'];
+  const j = await (await sendWav(base, '/api/learn/recall?sentenceId=1')).json();
+  assert.equal(j.heard, 'Sentence number 1 is here today.');
+  assert.equal(j.score, 100);
+  assert.equal(j.learned, true);
 });
 
 test('say it from memory: passing marks the sentence learned and moves on to the next one', async () => {

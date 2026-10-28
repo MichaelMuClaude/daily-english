@@ -34,12 +34,13 @@ async function synthesize(text, { fetchImpl = fetch, getToken = cognitiveToken, 
 }
 
 /**
- * Speech to text for a short (up to 20 s) 16 kHz mono WAV. Returns the recognised text, or '' when nothing
- * clear was heard. Throws if the service itself fails. The recording is never stored or logged.
+ * Speech to text for a short (up to 20 s) 16 kHz mono WAV. Returns the recogniser's alternatives, best first
+ * (an empty list when nothing clear was heard). Throws if the service itself fails. The recording is never
+ * stored or logged.
  */
 async function transcribe(wav, { fetchImpl = fetch, getToken = cognitiveToken, env = process.env } = {}) {
   const endpoint = env.AOAI_ENDPOINT.replace(/\/$/, '');
-  const res = await fetchImpl(`${endpoint}/stt/speech/recognition/conversation/cognitiveservices/v1?language=en-AU&format=simple`, {
+  const res = await fetchImpl(`${endpoint}/stt/speech/recognition/conversation/cognitiveservices/v1?language=en-AU&format=detailed`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${await getToken()}`,
@@ -52,9 +53,12 @@ async function transcribe(wav, { fetchImpl = fetch, getToken = cognitiveToken, e
   });
   if (!res.ok) throw new Error(`Speech-to-text HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
-  if (data.RecognitionStatus === 'Success') return String(data.DisplayText ?? '');
+  if (data.RecognitionStatus === 'Success') {
+    const alternatives = (data.NBest || []).map((n) => String(n.Display ?? '').trim()).filter(Boolean);
+    return alternatives.length ? alternatives : [String(data.DisplayText ?? '')].filter(Boolean);
+  }
   // These just mean "no usable speech in the recording".
-  if (['NoMatch', 'InitialSilenceTimeout', 'BabbleTimeout'].includes(data.RecognitionStatus)) return '';
+  if (['NoMatch', 'InitialSilenceTimeout', 'BabbleTimeout'].includes(data.RecognitionStatus)) return [];
   throw new Error(`Speech-to-text status ${data.RecognitionStatus}`);
 }
 

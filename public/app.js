@@ -223,20 +223,39 @@ function noMicMessage(err, result, sentenceId) {
   result.replaceChildren(el('p', 'error', text), skip);
 }
 
-function heardBlock(r, { showWords }) {
+// What went wrong, in plain Chinese, from the server's list of notes.
+function noteText(n) {
+  if (n.type === 'missing') return `漏了：“${n.expected}”`;
+  if (n.type === 'extra') return `多说了：“${n.said}”`;
+  return `“${n.expected}” 你说成了 “${n.said}”`;
+}
+
+// The marking: score, the original sentence with the missed words in red, what the learner said, and a short comment.
+function heardBlock(r) {
   const frag = document.createDocumentFragment();
   if (!r.heard) {
-    frag.append(el('p', 'feedback', "I couldn't hear anything clear. Hold the phone closer and try again. 请靠近麦克风再试一次。"));
+    frag.append(el('p', 'feedback', "I couldn't hear anything clear. Hold the phone closer and try again. 没听清，请靠近麦克风、说完再点停止，再试一次。"));
     return frag;
   }
-  frag.append(el('p', `score ${r.passed ? 'good' : 'bad'}`, `${r.score} / 100  ${r.passed ? '✓ Good' : '✗ Not quite — try again'}`));
-  const heard = el('p', 'ref');
-  heard.append('I heard: ', el('b', null, r.heard));
-  frag.append(heard);
-  if (showWords && r.words && !r.passed) {
+  frag.append(el('p', `score ${r.passed ? 'good' : 'bad'}`, `${r.score} / 100  ${r.passed ? '✓ 通过' : '✗ 还差一点，再试一次'}`));
+  if (r.words && !r.passed) {
     const line = el('p', 'words');
     for (const w of r.words) line.append(el('span', w.ok ? 'w ok' : 'w miss', w.word), ' ');
-    frag.append(el('p', 'ref', 'Red words were missing or different:'), line);
+    frag.append(el('p', 'ref', '原句（红色是漏了或说错的词）：'), line);
+  }
+  const heard = el('p', 'ref');
+  heard.append('你说的：', el('b', null, r.heard));
+  frag.append(heard);
+  const notes = r.notes || [];
+  if (notes.length) {
+    const list = el('ul', 'notes');
+    for (const n of notes) list.append(el('li', null, noteText(n)));
+    frag.append(el('p', 'ref', r.passed ? '通过了，小地方还可以更好：' : '点评：'), list);
+  } else {
+    frag.append(el('p', 'ref', '每个词都对，太棒了！'));
+  }
+  if (!r.passed) {
+    frag.append(el('p', 'ref', '如果你觉得自己说对了，可能是识别听错了：靠近麦克风、说慢一点、说完再点停止。'));
   }
   return frag;
 }
@@ -261,7 +280,7 @@ function renderLearn(data) {
     result,
     onNoMic: (err) => noMicMessage(err, result, s.id),
     onReply: (r, idle) => {
-      result.replaceChildren(heardBlock(r, { showWords: true }));
+      result.replaceChildren(heardBlock(r));
       if (r.passed) { setPrimary('Next: say it without looking', () => renderRecall(data, progressText(2))); primary.focus({ preventScroll: true }); } else idle();
     },
   });
@@ -283,16 +302,15 @@ function renderRecall(data, progressLabel) {
     onNoMic: (err) => noMicMessage(err, result, s.id),
     onReply: (r, idle) => {
       if (!r.passed) {
-        const nodes = [heardBlock(r, { showWords: false })];
-        nodes.push(el('p', 'ref', 'Need help? Listen once more, then say it again.'), listenButton(s.id, s.english));
+        const nodes = [heardBlock(r)];
+        if (r.original) nodes.push(listenButton(s.id, r.original), el('p', 'ref', '看一遍原句、听一遍，然后不看着再说一次。'));
         result.replaceChildren(...nodes);
         idle();
         return;
       }
       session.learned += 1;
-      const ok = el('p', 'score good', `${r.score} / 100  ✓ You said it!`);
       const ref = el('p', 'en', r.original);
-      result.replaceChildren(ok, ref, listenButton(s.id, r.original), notesBlock(s));
+      result.replaceChildren(heardBlock(r), ref, listenButton(s.id, r.original), notesBlock(s));
       setPrimary('Next', load);
       primary.focus({ preventScroll: true });
     },
