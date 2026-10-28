@@ -6,8 +6,9 @@ const { parseExplain } = require('./explain');
 
 const MAX_ANSWER_LEN = 300;
 const JUDGE_LIMIT_PER_HOUR = 40; // cost guard: each judged answer is one LLM call
+const SPEAK_LIMIT_PER_HOUR = 30; // cost guard: each NEW voice recording is one Speech call (replays come from the database)
 
-function createApp({ repo, llm, news, now = () => new Date() }) {
+function createApp({ repo, llm, news, speech, now = () => new Date() }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '4kb' }));
@@ -54,6 +55,16 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
     return true;
   }
 
+  const speakCalls = new Map(); // userId -> [timestamps of new syntheses]
+  function allowSynthesis(userId) {
+    const cutoff = now().getTime() - 3600_000;
+    const recent = (speakCalls.get(userId) || []).filter((t) => t > cutoff);
+    if (recent.length >= SPEAK_LIMIT_PER_HOUR) { speakCalls.set(userId, recent); return false; }
+    recent.push(now().getTime());
+    speakCalls.set(userId, recent);
+    return true;
+  }
+
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
   const api = express.Router();
@@ -77,20 +88,43 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
       console.error('generate failed:', err.message);
     }
     const learned = await repo.learnedIds(req.userId, rows.map((r) => r.id));
+    const learnedTotal = await repo.learnedCount(req.userId);
     const fresh = rows.filter((r) => !learned.has(r.id));
     if (fresh.length) {
       return res.json({
         kind: 'learn',
+        learnedTotal,
         step: { n: rows.length - fresh.length + 1, of: rows.length },
         sentence: shape(fresh[0]),
       });
     }
     const [item, due] = await Promise.all([repo.nextDue(req.userId, today), repo.dueCount(req.userId, today)]);
-    if (item) return res.json({ kind: 'review', left: due, item: { id: item.id, chinese: item.chinese } });
+    if (item) return res.json({ kind: 'review', learnedTotal, left: due, item: { id: item.id, chinese: item.chinese } });
     if (!rows.length) {
       return res.status(503).json({ error: "Today's sentences are not ready yet. Please try again in a minute." });
     }
-    res.json({ kind: 'done' });
+    res.json({ kind: 'done', learnedTotal });
+  }));
+
+  // The sentence read aloud by the cloud neural voice. Generated once, then served from the database.
+  api.get('/speak/:id', wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Bad sentence id' });
+    const row = await repo.sentenceForAudio(req.userId, id, perthDay(now()));
+    if (!row) return res.status(404).json({ error: 'Unknown sentence' });
+    let audio = row.audio;
+    if (!audio || !audio.length) {
+      if (!allowSynthesis(req.userId)) return res.status(429).json({ error: 'Too many new recordings this hour.' });
+      try {
+        audio = await speech.synthesize(row.english);
+      } catch (err) {
+        console.error('speech failed:', err.message);
+        return res.status(503).json({ error: 'The voice is not available right now.' });
+      }
+      await repo.saveAudio(row.id, audio);
+    }
+    res.set({ 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length, 'Cache-Control': 'private, max-age=86400' });
+    res.send(audio);
   }));
 
   api.post('/learn', wrap(async (req, res) => {
@@ -151,5 +185,6 @@ if (require.main === module) {
   const llm = require('./llm');
   const news = require('./news');
   const port = Number(process.env.PORT) || 3000;
-  createApp({ repo, llm, news }).listen(port, '0.0.0.0', () => console.log(`daily-english listening on ${port}`));
+  const speech = require('./speech');
+  createApp({ repo, llm, news, speech }).listen(port, '0.0.0.0', () => console.log(`daily-english listening on ${port}`));
 }

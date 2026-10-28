@@ -6,13 +6,20 @@ const { serializeExplain } = require('../src/explain');
 
 // In-memory fakes for the database, the news feeds and the LLM.
 function fakes() {
-  const state = { users: new Map(), sentences: [], learned: new Map(), dueIds: new Set(), reviews: [], genCalls: 0, judgeCalls: 0 };
+  const state = { users: new Map(), sentences: [], learned: new Map(), dueIds: new Set(), reviews: [], genCalls: 0, judgeCalls: 0, speakCalls: 0, audio: new Map() };
   const repo = {
     async upsertUser(u) { if (!state.users.has(u.idpId)) state.users.set(u.idpId, state.users.size + 1); return state.users.get(u.idpId); },
     async sentencesForDay() { return state.sentences; },
     async saveSentences(day, items) {
       items.forEach((s, i) => state.sentences.push({ id: i + 1, idx: i + 1, english: s.english, chinese: s.chinese, topic: s.topic, explain: serializeExplain(s) }));
     },
+    async learnedCount(u) { return [...state.learned.keys()].filter((k) => k.startsWith(`${u}:`)).length; },
+    async sentenceForAudio(u, id) {
+      const sen = state.sentences.find((x) => x.id === id);
+      if (!sen) return null;
+      return { id, english: sen.english, audio: state.audio.get(id) || null };
+    },
+    async saveAudio(id, buf) { state.audio.set(id, buf); },
     async learnedIds(u, ids) { return new Set(ids.filter((id) => state.learned.has(`${u}:${id}`))); },
     async markLearned(u, id) { if (!state.sentences.some((s) => s.id === id)) return false; state.learned.set(`${u}:${id}`, { box: 1 }); return true; },
     async dueCount(u) { return [...state.dueIds].filter((id) => state.learned.has(`${u}:${id}`)).length; },
@@ -42,7 +49,10 @@ function fakes() {
     },
     async judgeAnswer() { state.judgeCalls++; return { score: 90, correct: true, feedback: 'good', corrected: 'x' }; },
   };
-  return { state, repo, news, llm };
+  const speech = {
+    async synthesize(text) { state.speakCalls++; return Buffer.from(`MP3:${text}`.padEnd(2000, 'x')); },
+  };
+  return { state, repo, news, llm, speech };
 }
 
 // Servers are closed after the file's tests even when a test fails, so a failure can never hang the run.
@@ -99,7 +109,7 @@ test('the session: three new sentences one at a time (with Chinese notes), then 
     assert.equal(r.json.sentence.tip, `提示${n}`);
     assert.equal((await call('/api/learn', { sentenceId: r.json.sentence.id })).status, 200);
   }
-  assert.deepEqual((await call('/api/next')).json, { kind: 'done' });
+  assert.deepEqual((await call('/api/next')).json, { kind: 'done', learnedTotal: 3 });
 });
 
 test('the news link and source title are never sent to the browser', async () => {
@@ -199,4 +209,81 @@ test('an answer blocked by the safety filter gets a clear 400 and is not recorde
   assert.equal(r.status, 400);
   assert.match(r.json.error, /safety filter/);
   assert.equal(f.state.reviews.length, 0);
+});
+
+test('every answer from /api/next carries how many sentences the user has learned so far', async () => {
+  const { call } = await start();
+  const first = await call('/api/next');
+  assert.equal(first.json.learnedTotal, 0);
+  await call('/api/learn', { sentenceId: first.json.sentence.id });
+  assert.equal((await call('/api/next')).json.learnedTotal, 1);
+  for (let i = 0; i < 2; i++) await call('/api/learn', { sentenceId: (await call('/api/next')).json.sentence.id });
+  const done = await call('/api/next');
+  assert.equal(done.json.kind, 'done');
+  assert.equal(done.json.learnedTotal, 3);
+});
+
+// helper for raw (non-JSON) responses
+async function raw(base, path) { return fetch(base + path); }
+
+async function startRaw(f) {
+  Object.assign(process.env, { AUTH_MODE: 'dev', DEV_USER: 'me@x.com' });
+  const server = createApp(f).listen(0);
+  server.unref(); servers.push(server);
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+test('speak: returns the cloud voice as MP3 once, then replays it from the database cache', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next'); // creates today's sentences
+  const a = await raw(base, '/api/speak/1');
+  assert.equal(a.status, 200);
+  assert.equal(a.headers.get('content-type'), 'audio/mpeg');
+  assert.match(a.headers.get('cache-control'), /private/);
+  const body = Buffer.from(await a.arrayBuffer());
+  assert.match(body.toString(), /^MP3:Sentence number 1 is here today\./);
+  const b = await raw(base, '/api/speak/1');
+  assert.equal(b.status, 200);
+  assert.equal(f.state.speakCalls, 1); // the second play came from the cache
+});
+
+test('speak: bad ids and unknown sentences are refused; the voice service is not called', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  for (const id of ['abc', '0', '-3', '1.5']) assert.equal((await raw(base, `/api/speak/${id}`)).status, 400, id);
+  assert.equal((await raw(base, '/api/speak/999')).status, 404);
+  assert.equal(f.state.speakCalls, 0);
+});
+
+test('speak: needs a signed-in user', async () => {
+  Object.assign(process.env, { AUTH_MODE: 'easyauth' });
+  const f = fakes();
+  const server = createApp(f).listen(0); server.unref(); servers.push(server);
+  const r = await fetch(`http://127.0.0.1:${server.address().port}/api/speak/1`);
+  assert.equal(r.status, 401);
+  assert.equal(f.state.speakCalls, 0);
+});
+
+test('speak: a voice failure gives a friendly 503 (no internals) and caches nothing', async () => {
+  const f = fakes();
+  f.speech.synthesize = async () => { throw new Error('secret internals'); };
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  const r = await raw(base, '/api/speak/1');
+  assert.equal(r.status, 503);
+  assert.doesNotMatch(await r.text(), /secret internals/);
+  assert.equal(f.state.audio.size, 0);
+});
+
+test('speak: new recordings are rate limited per user, but cached replays are not', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  for (let i = 0; i < 40; i++) f.state.audio.delete(1), await raw(base, '/api/speak/1'); // force a new recording every time
+  assert.equal(f.state.speakCalls, 30);
+  assert.equal((await raw(base, '/api/speak/1')).status, 429);
+  f.state.audio.set(2, Buffer.alloc(2000)); // a cached sentence still plays
+  assert.equal((await raw(base, '/api/speak/2')).status, 200);
 });

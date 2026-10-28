@@ -33,6 +33,13 @@ function setProgress(text) {
   progress.textContent = text || '';
 }
 
+function setTotal(n) {
+  if (typeof n !== 'number') return;
+  const t = $('total');
+  t.hidden = false;
+  t.textContent = `📚 ${n} sentence${n === 1 ? '' : 's'} learned so far`;
+}
+
 function show(...nodes) {
   card.replaceChildren(...nodes);
   window.scrollTo(0, 0);
@@ -50,24 +57,43 @@ function showError(message) {
 }
 
 // ---------- shared pieces ----------
-function listenButton(text) {
-  if (!('speechSynthesis' in window)) return null;
+// The sentence read aloud by the cloud neural voice (/api/speak). If that is unavailable,
+// fall back to the voice built into the device.
+function speakWithDevice(text, b, reset) {
+  if (!('speechSynthesis' in window)) { b.textContent = '🔇 No voice available'; setTimeout(reset, 4000); return; }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-AU';
+  u.rate = 0.9;
+  u.onend = reset;
+  u.onerror = (e) => {
+    if (e.error === 'canceled' || e.error === 'interrupted') return;
+    b.textContent = '🔇 No voice on this device';
+    setTimeout(reset, 4000);
+  };
+  window.speechSynthesis.speak(u);
+}
+
+function listenButton(id, text) {
   const b = el('button', 'listen', '🔊 Listen');
   b.type = 'button';
   b.setAttribute('aria-label', 'Listen to the sentence');
+  let audio = null;
   const reset = () => { b.textContent = '🔊 Listen'; b.disabled = false; };
+  const fallback = () => { speakWithDevice(text, b, reset); };
   b.addEventListener('click', () => {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-AU';
-    u.rate = 0.9;
-    // Some devices have no English voice installed: say so instead of staying silent.
-    u.onerror = (e) => {
-      if (e.error === 'canceled' || e.error === 'interrupted') return;
-      b.textContent = '🔇 No voice on this device';
-      setTimeout(reset, 4000);
-    };
-    window.speechSynthesis.speak(u);
+    if (audio) { audio.pause(); audio.currentTime = 0; }
+    b.disabled = true;
+    b.textContent = '🔊 …';
+    // Created and played inside the tap, which phones require before they allow sound.
+    audio = audio || new Audio(`/api/speak/${id}`);
+    audio.onended = reset;
+    audio.onerror = () => { audio = null; fallback(); };
+    audio.play().then(() => { b.textContent = '🔊 Playing…'; }).catch((err) => {
+      if (err && err.name === 'AbortError') return;
+      audio = null;
+      fallback();
+    });
   });
   return b;
 }
@@ -94,7 +120,7 @@ function renderLearn(data) {
   setProgress(`New ${data.step.n} / ${data.step.of}`);
   const c = el('section', 'card');
   c.append(el('p', 'label', 'New sentence'), el('p', 'en', s.english));
-  const listen = listenButton(s.english);
+  const listen = listenButton(s.id, s.english);
   if (listen) c.append(listen);
   c.append(el('p', 'zh', s.chinese), notesBlock(s));
   show(c);
@@ -135,7 +161,7 @@ function renderReview(data) {
       const ref = el('p', 'ref');
       ref.append('Original: ', el('b', null, r.original));
       const nodes = [score, el('p', 'feedback', r.feedback), ref];
-      const listen = listenButton(r.original);
+      const listen = listenButton(item.id, r.original);
       if (listen) nodes.push(listen);
       nodes.push(notesBlock(r));
       result.replaceChildren(...nodes);
@@ -173,6 +199,7 @@ async function load() {
   setProgress(null);
   try {
     const data = await api('/next');
+    setTotal(data.learnedTotal);
     if (data.kind === 'learn') renderLearn(data);
     else if (data.kind === 'review') renderReview(data);
     else renderDone();

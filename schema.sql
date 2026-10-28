@@ -50,3 +50,7 @@ CREATE INDEX ix_user_sentences_due ON dbo.user_sentences (user_id, next_review);
 -- Chinese explanation of the hard words and phrases (JSON: {"notes":[{"phrase","zh"}],"tip":"..."})
 IF COL_LENGTH('dbo.sentences', 'explain') IS NULL
 ALTER TABLE dbo.sentences ADD explain NVARCHAR(MAX) NULL;
+
+-- Cached MP3 of the sentence read by the cloud neural voice (generated once, on first Listen)
+IF COL_LENGTH('dbo.sentences', 'audio') IS NULL
+ALTER TABLE dbo.sentences ADD audio VARBINARY(MAX) NULL;

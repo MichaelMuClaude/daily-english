@@ -1,18 +1,14 @@
 // LLM calls: write the day's sentences from news headlines, and judge a typed answer.
 // Uses an Azure OpenAI deployment with Microsoft Entra token auth (no API key).
-const { DefaultAzureCredential } = require('@azure/identity');
-
-const credential = new DefaultAzureCredential({
-  managedIdentityClientId: process.env.AZURE_CLIENT_ID || undefined,
-});
+const { cognitiveToken } = require('./azure');
 
 async function chatJson(messages, { maxTokens = 4000, fetchImpl = fetch } = {}) {
   const endpoint = process.env.AOAI_ENDPOINT.replace(/\/$/, '');
   const url = `${endpoint}/openai/deployments/${process.env.AOAI_DEPLOYMENT}/chat/completions?api-version=2024-10-21`;
-  const token = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const token = await cognitiveToken();
   const res = await fetchImpl(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token.token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     // Reasoning models spend part of the budget thinking, so keep it generous.
     body: JSON.stringify({ messages, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens }),
     signal: AbortSignal.timeout(90000),

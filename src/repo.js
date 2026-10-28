@@ -51,6 +51,28 @@ async function saveSentences(day, items) {
   }
 }
 
+/** A sentence this user may listen to: one of today's, or one they have learned. null otherwise. */
+async function sentenceForAudio(userId, sentenceId, day) {
+  const r = await query(
+    `SELECT s.id, s.english, s.audio FROM dbo.sentences s
+     WHERE s.id = @s AND (s.day = @day OR EXISTS
+       (SELECT 1 FROM dbo.user_sentences us WHERE us.user_id = @u AND us.sentence_id = s.id))`,
+    { s: [sql.Int, sentenceId], u: [sql.Int, userId], day: [sql.Date, day] },
+  );
+  return r.recordset[0] || null;
+}
+
+async function saveAudio(sentenceId, audio) {
+  await query('UPDATE dbo.sentences SET audio = @a WHERE id = @s AND audio IS NULL', {
+    a: [sql.VarBinary(sql.MAX), audio], s: [sql.Int, sentenceId],
+  });
+}
+
+async function learnedCount(userId) {
+  const r = await query('SELECT COUNT(*) AS n FROM dbo.user_sentences WHERE user_id = @u', { u: [sql.Int, userId] });
+  return r.recordset[0].n;
+}
+
 async function learnedIds(userId, sentenceIds) {
   if (!sentenceIds.length) return new Set();
   const r = await query(
@@ -134,6 +156,6 @@ async function stats(userId) {
 }
 
 module.exports = {
-  upsertUser, sentencesForDay, saveSentences, learnedIds, markLearned,
+  sentenceForAudio, saveAudio, learnedCount, upsertUser, sentencesForDay, saveSentences, learnedIds, markLearned,
   dueCount, nextDue, learnedSentence, recordReview, stats,
 };
