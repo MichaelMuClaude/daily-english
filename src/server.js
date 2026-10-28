@@ -2,6 +2,7 @@ const path = require('path');
 const express = require('express');
 const { requireUser } = require('./auth');
 const { perthDay } = require('./srs');
+const { parseExplain } = require('./explain');
 
 const MAX_ANSWER_LEN = 300;
 const JUDGE_LIMIT_PER_HOUR = 40; // cost guard: each judged answer is one LLM call
@@ -63,20 +64,33 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
 
   api.get('/me', (req, res) => res.json({ email: req.user.email }));
 
-  api.get('/today', wrap(async (req, res) => {
-    const day = perthDay(now());
-    let rows;
+  const shape = (r) => ({ id: r.id, english: r.english, chinese: r.chinese, ...parseExplain(r.explain) });
+
+  // One endpoint drives the whole session: the next new sentence, then the next review, then "done".
+  api.get('/next', wrap(async (req, res) => {
+    const today = perthDay(now());
+    let rows = [];
     try {
-      rows = await ensureToday(day);
+      rows = await ensureToday(today);
     } catch (err) {
+      // Reviews must still work if today's sentences could not be written.
       console.error('generate failed:', err.message);
-      return res.status(503).json({ error: "Today's sentences are not ready yet. Please try again in a minute." });
     }
     const learned = await repo.learnedIds(req.userId, rows.map((r) => r.id));
-    res.json({
-      day,
-      sentences: rows.map((r) => ({ ...r, learned: learned.has(r.id) })),
-    });
+    const fresh = rows.filter((r) => !learned.has(r.id));
+    if (fresh.length) {
+      return res.json({
+        kind: 'learn',
+        step: { n: rows.length - fresh.length + 1, of: rows.length },
+        sentence: shape(fresh[0]),
+      });
+    }
+    const [item, due] = await Promise.all([repo.nextDue(req.userId, today), repo.dueCount(req.userId, today)]);
+    if (item) return res.json({ kind: 'review', left: due, item: { id: item.id, chinese: item.chinese } });
+    if (!rows.length) {
+      return res.status(503).json({ error: "Today's sentences are not ready yet. Please try again in a minute." });
+    }
+    res.json({ kind: 'done' });
   }));
 
   api.post('/learn', wrap(async (req, res) => {
@@ -85,12 +99,6 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
     const ok = await repo.markLearned(req.userId, id, perthDay(now()));
     if (!ok) return res.status(404).json({ error: 'Unknown sentence' });
     res.json({ ok: true });
-  }));
-
-  api.get('/review/next', wrap(async (req, res) => {
-    const today = perthDay(now());
-    const [item, due] = await Promise.all([repo.nextDue(req.userId, today), repo.dueCount(req.userId, today)]);
-    res.json({ due, item });
   }));
 
   api.post('/review/answer', wrap(async (req, res) => {
@@ -116,7 +124,12 @@ function createApp({ repo, llm, news, now = () => new Date() }) {
       return res.status(503).json({ error: 'The marker is not available right now. Please try again.' });
     }
     const state = await repo.recordReview(req.userId, sentence, answer, judgement, perthDay(now()));
-    res.json({ ...judgement, original: sentence.english, nextReview: state.nextReview });
+    res.json({
+      ...judgement,
+      original: sentence.english,
+      nextReview: state.nextReview,
+      ...parseExplain(sentence.explain),
+    });
   }));
 
   api.get('/stats', wrap(async (req, res) => res.json(await repo.stats(req.userId))));

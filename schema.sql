@@ -46,3 +46,7 @@ CREATE TABLE dbo.reviews (
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_user_sentences_due')
 CREATE INDEX ix_user_sentences_due ON dbo.user_sentences (user_id, next_review);
+
+-- Chinese explanation of the hard words and phrases (JSON: {"notes":[{"phrase","zh"}],"tip":"..."})
+IF COL_LENGTH('dbo.sentences', 'explain') IS NULL
+ALTER TABLE dbo.sentences ADD explain NVARCHAR(MAX) NULL;

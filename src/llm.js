@@ -72,7 +72,19 @@ Content rules:
 - Base each sentence on facts from the story text; do not invent facts. Use your own words; never copy a sentence from the story.
 - Avoid crime, violence, death, disasters and party politics. Prefer Perth and Western Australia; if a story is from another state, name the state.
 Then give a natural, spoken Chinese (Simplified) translation, not a word-for-word one.
-Reply with JSON only: {"sentences":[{"source_index":<number of the story>,"english":"...","chinese":"...","topic":"<one or two words>"}]}`;
+Then explain the sentence IN CHINESE for a learner: "notes" lists 2 to 4 words or phrases from the sentence that an intermediate learner may find hard (phrasal verbs, idioms, slang, spoken contractions such as "it's going to"). Each note has "phrase" (the exact words as written in your English sentence) and "zh" (a simple Chinese meaning, plus a few words on how it is used in speech). "tip" is ONE short Chinese sentence about the tone or when to say it (for example with friends, a little casual).
+Reply with JSON only: {"sentences":[{"source_index":<number of the story>,"english":"...","chinese":"...","topic":"<one or two words>","notes":[{"phrase":"...","zh":"..."}],"tip":"..."}]}`;
+
+/** Keep only notes whose phrase really appears in the sentence; at least one must survive. */
+function cleanNotes(rawNotes, english) {
+  const lower = english.toLowerCase();
+  const notes = (Array.isArray(rawNotes) ? rawNotes : [])
+    .map((n) => ({ phrase: String(n?.phrase ?? '').trim().slice(0, 80), zh: String(n?.zh ?? '').trim().slice(0, 300) }))
+    .filter((n) => n.phrase && n.zh && lower.includes(n.phrase.toLowerCase()))
+    .slice(0, 5);
+  if (!notes.length) throw new Error('No usable notes');
+  return notes;
+}
 
 /** Check and normalise the model's answer. Throws if it is not usable. */
 function validateSentences(data, stories) {
@@ -93,6 +105,8 @@ function validateSentences(data, stories) {
     return {
       english,
       chinese,
+      notes: cleanNotes(s.notes, english),
+      tip: String(s.tip ?? '').trim().slice(0, 300),
       topic: String(s.topic ?? '').trim().slice(0, 60) || null,
       sourceTitle: src.title.slice(0, 400),
       sourceUrl: src.url.slice(0, 1000),
@@ -112,7 +126,7 @@ async function generateSentences(stories, { chat = chatJson } = {}) {
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return validateSentences(await chat(messages, { maxTokens: 6000 }), stories);
+      return validateSentences(await chat(messages, { maxTokens: 8000 }), stories);
     } catch (err) {
       lastErr = err;
     }

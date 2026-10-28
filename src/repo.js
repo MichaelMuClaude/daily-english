@@ -1,5 +1,6 @@
 // All SQL lives here. Every query is parameterised.
 const { sql, query } = require('./db');
+const { serializeExplain } = require('./explain');
 const { nextState, addDays } = require('./srs');
 
 async function upsertUser({ idpId, email }) {
@@ -18,7 +19,7 @@ async function upsertUser({ idpId, email }) {
 
 async function sentencesForDay(day) {
   const r = await query(
-    `SELECT id, idx, english, chinese, topic, source_title AS sourceTitle, source_url AS sourceUrl
+    `SELECT id, idx, english, chinese, topic, explain
      FROM dbo.sentences WHERE day = @day ORDER BY idx`,
     { day: [sql.Date, day] },
   );
@@ -31,8 +32,8 @@ async function saveSentences(day, items) {
     const s = items[i];
     try {
       await query(
-        `INSERT dbo.sentences (day, idx, english, chinese, topic, source_title, source_url)
-         VALUES (@day, @idx, @en, @zh, @topic, @title, @url)`,
+        `INSERT dbo.sentences (day, idx, english, chinese, topic, source_title, source_url, explain)
+         VALUES (@day, @idx, @en, @zh, @topic, @title, @url, @explain)`,
         {
           day: [sql.Date, day],
           idx: [sql.TinyInt, i + 1],
@@ -41,6 +42,7 @@ async function saveSentences(day, items) {
           topic: [sql.NVarChar(60), s.topic],
           title: [sql.NVarChar(400), s.sourceTitle],
           url: [sql.NVarChar(1000), s.sourceUrl],
+          explain: [sql.NVarChar(sql.MAX), serializeExplain(s)],
         },
       );
     } catch (err) {
@@ -93,7 +95,7 @@ async function nextDue(userId, today) {
 /** A sentence the user has learned (needed to judge an answer). null if not learned. */
 async function learnedSentence(userId, sentenceId) {
   const r = await query(
-    `SELECT s.id, s.english, s.chinese, us.box
+    `SELECT s.id, s.english, s.chinese, s.explain, us.box
      FROM dbo.user_sentences us JOIN dbo.sentences s ON s.id = us.sentence_id
      WHERE us.user_id = @u AND us.sentence_id = @s`,
     { u: [sql.Int, userId], s: [sql.Int, sentenceId] },

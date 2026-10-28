@@ -5,9 +5,9 @@ const { validateSentences, generateSentences, judgeAnswer, normaliseJudgement, p
 const headlines = [0, 1, 2, 3].map((i) => ({ title: `Story ${i}`, summary: '', url: `https://e.com/${i}` }));
 const good = (extra = {}) => ({
   sentences: [
-    { source_index: 0, english: 'The buses in Perth will cost more next month.', chinese: '下个月珀斯的公交车票会涨价。', topic: 'transport' },
-    { source_index: 2, english: 'It will be sunny and warm this weekend in Perth.', chinese: '这个周末珀斯天气晴朗温暖。', topic: 'weather' },
-    { source_index: 3, english: 'Many families are looking for cheaper school uniforms.', chinese: '很多家庭在找更便宜的校服。', topic: 'school', ...extra },
+    { source_index: 0, english: 'The buses in Perth will cost more next month.', chinese: '下个月珀斯的公交车票会涨价。', topic: 'transport', notes: [{ phrase: 'cost more', zh: '更贵' }], tip: '聊天用。' },
+    { source_index: 2, english: 'It will be sunny and warm this weekend in Perth.', chinese: '这个周末珀斯天气晴朗温暖。', topic: 'weather', notes: [{ phrase: 'sunny and warm', zh: '晴朗温暖' }] },
+    { source_index: 3, english: 'Many families are looking for cheaper school uniforms.', chinese: '很多家庭在找更便宜的校服。', topic: 'school', notes: [{ phrase: 'looking for', zh: '寻找' }], ...extra },
   ],
 });
 
@@ -81,4 +81,24 @@ test('generateSentences sends the full story text and demands spoken English', a
 test('validateSentences rejects very long sentences', () => {
   const long = Array(40).fill('word').join(' ');
   assert.throws(() => validateSentences(good({ english: long }), headlines), /English/);
+});
+
+test('validateSentences keeps only notes whose phrase is really in the sentence', () => {
+  const out = validateSentences(good({ notes: [{ phrase: 'LOOKING FOR', zh: '寻找' }, { phrase: 'not in it', zh: '假的' }, { phrase: '', zh: 'x' }, { phrase: 'cheaper', zh: '' }] }), headlines);
+  assert.deepEqual(out[2].notes, [{ phrase: 'LOOKING FOR', zh: '寻找' }]);
+  assert.equal(out[0].tip, '聊天用。');
+});
+
+test('validateSentences rejects a sentence with no usable Chinese notes', () => {
+  assert.throws(() => validateSentences(good({ notes: [] }), headlines), /notes/i);
+  assert.throws(() => validateSentences(good({ notes: [{ phrase: 'not in it', zh: '假' }] }), headlines), /notes/i);
+  assert.throws(() => validateSentences(good({ notes: 'oops' }), headlines), /notes/i);
+});
+
+test('the generator prompt asks for Chinese notes and a tip', async () => {
+  let sent;
+  await generateSentences(headlines.map((h) => ({ ...h, text: 't' })), { chat: async (m) => { sent = m; return good(); } });
+  assert.match(sent[0].content, /IN CHINESE/);
+  assert.match(sent[0].content, /"notes"/);
+  assert.match(sent[0].content, /"tip"/);
 });
