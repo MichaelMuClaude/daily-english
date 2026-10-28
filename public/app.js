@@ -114,25 +114,189 @@ function notesBlock({ notes, tip }) {
   return frag;
 }
 
-// ---------- a new sentence ----------
-function renderLearn(data) {
-  const s = data.sentence;
-  setProgress(`New ${data.step.n} / ${data.step.of}`);
-  const c = el('section', 'card');
-  c.append(el('p', 'label', 'New sentence'), el('p', 'en', s.english));
-  const listen = listenButton(s.id, s.english);
-  if (listen) c.append(listen);
-  c.append(el('p', 'zh', s.chinese), notesBlock(s));
-  show(c);
-  setPrimary('Got it', async () => {
+// ---------- the microphone ----------
+const MAX_RECORD_MS = 19500; // the server accepts up to 20 s
+
+// Starts recording. Must be called straight from a tap (phones only allow audio then). Returns { stop() -> WAV bytes }.
+async function startRecording() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx || !window.AudioWorklet || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    const err = new Error('This browser cannot record audio');
+    err.name = 'NotSupportedError';
+    throw err;
+  }
+  const ctx = new Ctx(); // created inside the tap, before any await
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    await ctx.resume();
+    await ctx.audioWorklet.addModule('recorder-worklet.js');
+  } catch (err) {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    ctx.close();
+    throw err;
+  }
+  const chunks = [];
+  const node = new AudioWorkletNode(ctx, 'capture');
+  node.port.onmessage = (e) => chunks.push(e.data);
+  const silent = ctx.createGain(); // a worklet only runs while it is connected to the output; this keeps it silent
+  silent.gain.value = 0;
+  ctx.createMediaStreamSource(stream).connect(node);
+  node.connect(silent).connect(ctx.destination);
+  return {
+    async stop() {
+      stream.getTracks().forEach((t) => t.stop());
+      node.disconnect();
+      const rate = ctx.sampleRate;
+      await ctx.close();
+      const all = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
+      let at = 0;
+      for (const c of chunks) { all.set(c, at); at += c.length; }
+      return WavEncoder.encodeWav(all, rate);
+    },
+  };
+}
+
+async function sendRecording(path, wav) {
+  const res = await fetch(`/api${path}`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+/**
+ * Turns the big bottom button into a record / stop button. Tap once to start, tap again (or wait 20 s) to send.
+ * onReply gets the server's answer; onNoMic is called when the microphone cannot be used at all.
+ */
+function micControl({ label, path, result, onReply, onNoMic }) {
+  let rec = null;
+  let timer = null;
+  const idle = () => setPrimary(`🎤 ${label}`, toggle);
+
+  async function toggle() {
+    if (rec) return finish();
     primary.disabled = true;
     try {
-      await api('/learn', { sentenceId: s.id });
-      session.learned += 1;
-      load();
-    } catch (e) { primary.disabled = false; showError(e.message); }
+      rec = await startRecording();
+    } catch (err) {
+      rec = null;
+      idle();
+      return onNoMic(err);
+    }
+    primary.disabled = false;
+    primary.textContent = '⏹ Tap when you finish';
+    result.replaceChildren(el('p', 'rec', '● Recording… speak now'));
+    timer = setTimeout(finish, MAX_RECORD_MS);
+  }
+
+  async function finish() {
+    const r = rec;
+    rec = null;
+    clearTimeout(timer);
+    primary.disabled = true;
+    primary.textContent = 'Listening…';
+    result.replaceChildren(el('p', 'status', 'Listening to your recording…'));
+    try {
+      const wav = await r.stop();
+      onReply(await sendRecording(path, wav), idle);
+    } catch (err) {
+      result.replaceChildren(el('p', 'error', err.message));
+      idle();
+    }
+  }
+
+  idle();
+}
+
+// Shown when the microphone is blocked or missing: explain, and allow the old "Got it" so nobody is locked out.
+function noMicMessage(err, result, sentenceId) {
+  const blocked = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+  const text = blocked
+    ? 'The microphone is blocked. Allow it for this site in your browser settings, then tap the microphone button again.'
+    : 'No microphone can be used on this device or browser.';
+  const skip = el('button', 'listen', 'Continue without speaking');
+  skip.type = 'button';
+  skip.addEventListener('click', async () => {
+    skip.disabled = true;
+    try { await api('/learn', { sentenceId }); session.learned += 1; load(); } catch (e) { showError(e.message); }
   });
-  primary.focus({ preventScroll: true });
+  result.replaceChildren(el('p', 'error', text), skip);
+}
+
+function heardBlock(r, { showWords }) {
+  const frag = document.createDocumentFragment();
+  if (!r.heard) {
+    frag.append(el('p', 'feedback', "I couldn't hear anything clear. Hold the phone closer and try again. 请靠近麦克风再试一次。"));
+    return frag;
+  }
+  frag.append(el('p', `score ${r.passed ? 'good' : 'bad'}`, `${r.score} / 100  ${r.passed ? '✓ Good' : '✗ Not quite — try again'}`));
+  const heard = el('p', 'ref');
+  heard.append('I heard: ', el('b', null, r.heard));
+  frag.append(heard);
+  if (showWords && r.words && !r.passed) {
+    const line = el('p', 'words');
+    for (const w of r.words) line.append(el('span', w.ok ? 'w ok' : 'w miss', w.word), ' ');
+    frag.append(el('p', 'ref', 'Red words were missing or different:'), line);
+  }
+  return frag;
+}
+
+// ---------- a new sentence: step 1 read it aloud, step 2 say it from memory ----------
+function renderLearn(data) {
+  const s = data.sentence;
+  const of = data.step.of;
+  const progressText = (stage) => `New ${data.step.n} / ${of} · Step ${stage} of 2`;
+
+  // Step 1: the English is on screen; read it out loud.
+  setProgress(progressText(1));
+  const c = el('section', 'card');
+  c.append(el('p', 'label', 'Step 1 · Read it out loud'), el('p', 'en', s.english));
+  c.append(listenButton(s.id, s.english), el('p', 'zh', s.chinese), notesBlock(s));
+  const result = el('div', 'result');
+  c.append(result);
+  show(c);
+  micControl({
+    label: 'Tap and read it out loud',
+    path: `/learn/read?sentenceId=${s.id}`,
+    result,
+    onNoMic: (err) => noMicMessage(err, result, s.id),
+    onReply: (r, idle) => {
+      result.replaceChildren(heardBlock(r, { showWords: true }));
+      if (r.passed) { setPrimary('Next: say it without looking', () => renderRecall(data, progressText(2))); primary.focus({ preventScroll: true }); } else idle();
+    },
+  });
+}
+
+// Step 2: the English is hidden; the learner sees the Chinese and says the English sentence.
+function renderRecall(data, progressLabel) {
+  const s = data.sentence;
+  setProgress(progressLabel);
+  const c = el('section', 'card');
+  c.append(el('p', 'label', 'Step 2 · Now say it in English'), el('p', 'zh big', s.chinese));
+  const result = el('div', 'result');
+  c.append(result);
+  show(c);
+  micControl({
+    label: 'Tap and say it in English',
+    path: `/learn/recall?sentenceId=${s.id}`,
+    result,
+    onNoMic: (err) => noMicMessage(err, result, s.id),
+    onReply: (r, idle) => {
+      if (!r.passed) {
+        const nodes = [heardBlock(r, { showWords: false })];
+        nodes.push(el('p', 'ref', 'Need help? Listen once more, then say it again.'), listenButton(s.id, s.english));
+        result.replaceChildren(...nodes);
+        idle();
+        return;
+      }
+      session.learned += 1;
+      const ok = el('p', 'score good', `${r.score} / 100  ✓ You said it!`);
+      const ref = el('p', 'en', r.original);
+      result.replaceChildren(ok, ref, listenButton(s.id, r.original), notesBlock(s));
+      setPrimary('Next', load);
+      primary.focus({ preventScroll: true });
+    },
+  });
 }
 
 // ---------- an old sentence to review ----------

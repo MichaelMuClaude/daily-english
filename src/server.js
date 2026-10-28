@@ -3,11 +3,15 @@ const express = require('express');
 const { requireUser } = require('./auth');
 const { perthDay } = require('./srs');
 const { parseExplain } = require('./explain');
+const { compare } = require('./match');
+const { checkWav } = require('./wav');
 
 const MAX_ANSWER_LEN = 300;
 const JUDGE_LIMIT_PER_HOUR = 40; // cost guard: each judged answer is one LLM call
 const DAILY_REVIEW_CAP = 10; // most reviews shown per Perth day, most overdue first; the rest wait for tomorrow
 const SPEAK_LIMIT_PER_HOUR = 30; // cost guard: each NEW voice recording is one Speech call (replays come from the database)
+const LISTEN_LIMIT_PER_HOUR = 60; // cost guard: each recording the learner sends is one speech-to-text call
+const MAX_RECORDING_BYTES = 700 * 1024; // 20 s of 16 kHz 16-bit mono is about 640 KB
 
 function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap = DAILY_REVIEW_CAP }) {
   const app = express();
@@ -18,6 +22,7 @@ function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap 
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
       'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'",
+      'Permissions-Policy': 'microphone=(self), camera=(), geolocation=()',
     });
     next();
   });
@@ -45,26 +50,21 @@ function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap 
     return rows;
   }
 
-  // ---- per-user rate limit for LLM judging ----
-  const judgeCalls = new Map(); // userId -> [timestamps]
-  function allowJudge(userId) {
-    const cutoff = now().getTime() - 3600_000;
-    const recent = (judgeCalls.get(userId) || []).filter((t) => t > cutoff);
-    if (recent.length >= JUDGE_LIMIT_PER_HOUR) { judgeCalls.set(userId, recent); return false; }
-    recent.push(now().getTime());
-    judgeCalls.set(userId, recent);
-    return true;
+  // ---- per-user rate limits (cost guards), one sliding hour each ----
+  function hourlyLimit(limit) {
+    const calls = new Map(); // userId -> [timestamps]
+    return (userId) => {
+      const cutoff = now().getTime() - 3600_000;
+      const recent = (calls.get(userId) || []).filter((t) => t > cutoff);
+      const allowed = recent.length < limit;
+      if (allowed) recent.push(now().getTime());
+      calls.set(userId, recent);
+      return allowed;
+    };
   }
-
-  const speakCalls = new Map(); // userId -> [timestamps of new syntheses]
-  function allowSynthesis(userId) {
-    const cutoff = now().getTime() - 3600_000;
-    const recent = (speakCalls.get(userId) || []).filter((t) => t > cutoff);
-    if (recent.length >= SPEAK_LIMIT_PER_HOUR) { speakCalls.set(userId, recent); return false; }
-    recent.push(now().getTime());
-    speakCalls.set(userId, recent);
-    return true;
-  }
+  const allowJudge = hourlyLimit(JUDGE_LIMIT_PER_HOUR);
+  const allowSynthesis = hourlyLimit(SPEAK_LIMIT_PER_HOUR);
+  const allowTranscription = hourlyLimit(LISTEN_LIMIT_PER_HOUR);
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
 
@@ -133,6 +133,43 @@ function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap 
     res.send(audio);
   }));
 
+  // The learner speaks a new sentence: first reading it aloud ('read'), then from memory with only the
+  // Chinese showing ('recall'). The recording (a 16 kHz WAV in the request body) is turned into text and
+  // compared word by word. Passing 'recall' is what marks the sentence as learned.
+  const recording = express.raw({ type: 'audio/wav', limit: MAX_RECORDING_BYTES });
+  const spoken = (stage) => wrap(async (req, res) => {
+    const id = Number(req.query.sentenceId);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'sentenceId required' });
+    const row = await repo.sentenceForAudio(req.userId, id, perthDay(now()));
+    if (!row) return res.status(404).json({ error: 'Unknown sentence' });
+    try {
+      checkWav(req.body);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!allowTranscription(req.userId)) {
+      return res.status(429).json({ error: 'Too many recordings this hour. Take a break and come back later.' });
+    }
+    let heard;
+    try {
+      heard = await speech.transcribe(req.body);
+    } catch (err) {
+      console.error('speech-to-text failed:', err.message);
+      return res.status(503).json({ error: 'The listener is not available right now. Please try again.' });
+    }
+    const result = compare(row.english, heard);
+    const out = { heard, score: result.score, passed: result.passed };
+    if (stage === 'read') out.words = result.words; // the English is on screen during this step anyway
+    if (stage === 'recall' && result.passed) {
+      await repo.markLearned(req.userId, id, perthDay(now()));
+      out.learned = true;
+      out.original = row.english;
+    }
+    res.json(out);
+  });
+  api.post('/learn/read', recording, spoken('read'));
+  api.post('/learn/recall', recording, spoken('recall'));
+
   api.post('/learn', wrap(async (req, res) => {
     const id = Number(req.body?.sentenceId);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'sentenceId required' });
@@ -178,6 +215,7 @@ function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap 
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'The recording is too long' });
     console.error('request failed:', err.message);
     res.status(500).json({ error: 'Something went wrong' });
   });

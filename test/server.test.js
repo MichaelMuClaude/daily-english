@@ -6,7 +6,7 @@ const { serializeExplain } = require('../src/explain');
 
 // In-memory fakes for the database, the news feeds and the LLM.
 function fakes() {
-  const state = { users: new Map(), sentences: [], learned: new Map(), dueIds: new Set(), reviews: [], genCalls: 0, judgeCalls: 0, speakCalls: 0, audio: new Map() };
+  const state = { users: new Map(), sentences: [], learned: new Map(), dueIds: new Set(), reviews: [], genCalls: 0, judgeCalls: 0, speakCalls: 0, audio: new Map(), heard: '', transcribeCalls: 0 };
   const repo = {
     async upsertUser(u) { if (!state.users.has(u.idpId)) state.users.set(u.idpId, state.users.size + 1); return state.users.get(u.idpId); },
     async sentencesForDay() { return state.sentences; },
@@ -52,6 +52,7 @@ function fakes() {
   };
   const speech = {
     async synthesize(text) { state.speakCalls++; return Buffer.from(`MP3:${text}`.padEnd(2000, 'x')); },
+    async transcribe() { state.transcribeCalls++; if (state.heard instanceof Error) throw state.heard; return state.heard; },
   };
   return { state, repo, news, llm, speech };
 }
@@ -304,4 +305,99 @@ test('daily cap: after the cap is reached, the rest of the due reviews wait for 
   const done = await call('/api/next');
   assert.equal(done.json.kind, 'done');
   assert.equal(done.json.waiting, 3);
+});
+
+// ---- speaking: read it aloud, then say it from memory ----
+const { encodeWav } = require('../public/wav');
+const goodWav = Buffer.from(encodeWav(Float32Array.from({ length: 48000 * 2 }, (_, i) => Math.sin(i / 20) * 0.5), 48000));
+const sendWav = (base, path, body = goodWav, type = 'audio/wav') => fetch(base + path, { method: 'POST', headers: { 'Content-Type': type }, body });
+
+test('read aloud: the heard text is compared with the sentence, wrong words are marked, and nothing is learned yet', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = 'Sentence number 1 is here';
+  const r = await sendWav(base, '/api/learn/read?sentenceId=1');
+  const j = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(j.heard, 'Sentence number 1 is here');
+  assert.equal(j.passed, true);
+  assert.deepEqual(j.words.filter((w) => !w.ok).map((w) => w.word), ['today']);
+  assert.equal(f.state.learned.size, 0);
+  f.state.heard = 'something else completely';
+  assert.equal((await (await sendWav(base, '/api/learn/read?sentenceId=1')).json()).passed, false);
+});
+
+test('say it from memory: a failed attempt does not reveal the English and does not mark the sentence learned', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = 'I do not remember';
+  const r = await sendWav(base, '/api/learn/recall?sentenceId=2');
+  const text = await r.text();
+  assert.equal(JSON.parse(text).passed, false);
+  assert.doesNotMatch(text, /Sentence number/); // the answer stays hidden
+  assert.equal(f.state.learned.size, 0);
+});
+
+test('say it from memory: passing marks the sentence learned and moves on to the next one', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = 'Sentence number 1 is here today.';
+  const j = await (await sendWav(base, '/api/learn/recall?sentenceId=1')).json();
+  assert.equal(j.passed, true);
+  assert.equal(j.learned, true);
+  assert.equal(j.original, 'Sentence number 1 is here today.');
+  assert.equal(f.state.learned.size, 1);
+  assert.equal((await (await raw(base, '/api/next')).json()).step.n, 2);
+});
+
+test('speaking: bad input is refused before the speech service is called', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  assert.equal((await sendWav(base, '/api/learn/read')).status, 400); // no sentence id
+  assert.equal((await sendWav(base, '/api/learn/read?sentenceId=99')).status, 404);
+  assert.equal((await sendWav(base, '/api/learn/read?sentenceId=1', Buffer.from('not audio'))).status, 400);
+  assert.equal((await sendWav(base, '/api/learn/read?sentenceId=1', JSON.stringify({ a: 1 }), 'application/json')).status, 400);
+  assert.equal((await sendWav(base, '/api/learn/read?sentenceId=1', Buffer.alloc(900 * 1024), 'audio/wav')).status, 413);
+  assert.equal(f.state.transcribeCalls, 0);
+});
+
+test('speaking: needs a signed-in user', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  Object.assign(process.env, { AUTH_MODE: 'easyauth' });
+  const res = await sendWav(base, '/api/learn/recall?sentenceId=1');
+  Object.assign(process.env, { AUTH_MODE: 'dev' });
+  assert.equal(res.status, 401);
+  assert.equal(f.state.transcribeCalls, 0);
+});
+
+test('speaking: a speech-to-text failure gives a friendly 503 and learns nothing', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = new Error('internal secret detail');
+  const res = await sendWav(base, '/api/learn/recall?sentenceId=1');
+  assert.equal(res.status, 503);
+  assert.doesNotMatch(await res.text(), /secret/);
+  assert.equal(f.state.learned.size, 0);
+});
+
+test('speaking: recordings are rate limited per user', async () => {
+  const f = fakes();
+  const base = await startRaw(f);
+  await raw(base, '/api/next');
+  f.state.heard = 'nope';
+  for (let i = 0; i < 60; i++) assert.equal((await sendWav(base, '/api/learn/read?sentenceId=1')).status, 200);
+  assert.equal((await sendWav(base, '/api/learn/read?sentenceId=1')).status, 429);
+  assert.equal(f.state.transcribeCalls, 60);
+});
+
+test('replies allow the microphone for this site only', async () => {
+  const base = await startRaw(fakes());
+  assert.match((await raw(base, '/healthz')).headers.get('permissions-policy'), /microphone=\(self\)/);
 });

@@ -33,4 +33,29 @@ async function synthesize(text, { fetchImpl = fetch, getToken = cognitiveToken, 
   return audio;
 }
 
-module.exports = { synthesize, buildSsml };
+/**
+ * Speech to text for a short (up to 20 s) 16 kHz mono WAV. Returns the recognised text, or '' when nothing
+ * clear was heard. Throws if the service itself fails. The recording is never stored or logged.
+ */
+async function transcribe(wav, { fetchImpl = fetch, getToken = cognitiveToken, env = process.env } = {}) {
+  const endpoint = env.AOAI_ENDPOINT.replace(/\/$/, '');
+  const res = await fetchImpl(`${endpoint}/stt/speech/recognition/conversation/cognitiveservices/v1?language=en-AU&format=simple`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${await getToken()}`,
+      'Content-Type': 'audio/wav; codecs=audio/pcm; samplerate=16000',
+      Accept: 'application/json',
+      'User-Agent': 'daily-english',
+    },
+    body: wav,
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) throw new Error(`Speech-to-text HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  if (data.RecognitionStatus === 'Success') return String(data.DisplayText ?? '');
+  // These just mean "no usable speech in the recording".
+  if (['NoMatch', 'InitialSilenceTimeout', 'BabbleTimeout'].includes(data.RecognitionStatus)) return '';
+  throw new Error(`Speech-to-text status ${data.RecognitionStatus}`);
+}
+
+module.exports = { synthesize, buildSsml, transcribe };
