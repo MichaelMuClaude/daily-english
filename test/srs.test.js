@@ -9,13 +9,19 @@ test('addDays crosses month and year ends', () => {
 });
 
 test('correct answers climb the boxes and stop at the top', () => {
-  assert.deepEqual(nextState(1, true, '2026-10-28'), { box: 2, nextReview: '2026-10-31' });
-  assert.deepEqual(nextState(4, true, '2026-10-28'), { box: 5, nextReview: '2026-11-27' });
-  assert.deepEqual(nextState(5, true, '2026-10-28'), { box: 5, nextReview: '2026-11-27' });
+  assert.deepEqual(nextState(1, true, '2026-10-28'), { box: 2, nextReview: '2026-10-31', retired: false });
+  assert.deepEqual(nextState(4, true, '2026-10-28'), { box: 5, nextReview: '2026-11-27', retired: false });
+  assert.deepEqual(nextState(5, true, '2026-10-28'), { box: 5, nextReview: '2026-11-27', retired: true });
+});
+
+test('a correct answer in the top box retires the sentence; other answers do not', () => {
+  assert.equal(nextState(5, true, '2026-10-28').retired, true);
+  assert.equal(nextState(4, true, '2026-10-28').retired, false);
+  assert.equal(nextState(5, false, '2026-10-28').retired, false);
 });
 
 test('a wrong answer goes back to box 1, due tomorrow', () => {
-  assert.deepEqual(nextState(4, false, '2026-10-28'), { box: 1, nextReview: '2026-10-29' });
+  assert.deepEqual(nextState(4, false, '2026-10-28'), { box: 1, nextReview: '2026-10-29', retired: false });
 });
 
 test('perthDay uses Perth time, not UTC', () => {

@@ -23,6 +23,7 @@ function fakes() {
     async learnedIds(u, ids) { return new Set(ids.filter((id) => state.learned.has(`${u}:${id}`))); },
     async markLearned(u, id) { if (!state.sentences.some((s) => s.id === id)) return false; state.learned.set(`${u}:${id}`, { box: 1 }); return true; },
     async dueCount(u) { return [...state.dueIds].filter((id) => state.learned.has(`${u}:${id}`)).length; },
+    async reviewedToday() { return new Set(state.reviews.map((r) => r.id)).size; },
     async nextDue(u) {
       const id = [...state.dueIds].find((x) => state.learned.has(`${u}:${x}`));
       const s = state.sentences.find((x) => x.id === id);
@@ -286,4 +287,21 @@ test('speak: new recordings are rate limited per user, but cached replays are no
   assert.equal((await raw(base, '/api/speak/1')).status, 429);
   f.state.audio.set(2, Buffer.alloc(2000)); // a cached sentence still plays
   assert.equal((await raw(base, '/api/speak/2')).status, 200);
+});
+
+test('daily cap: after the cap is reached, the rest of the due reviews wait for tomorrow', async () => {
+  const f = fakes();
+  f.reviewCap = 2;
+  const { call } = await start(f);
+  for (let i = 0; i < 3; i++) await call('/api/learn', { sentenceId: (await call('/api/next')).json.sentence.id });
+  [1, 2, 3].forEach((id) => f.state.dueIds.add(id));
+  const first = await call('/api/next');
+  assert.equal(first.json.kind, 'review');
+  assert.equal(first.json.left, 2); // 3 are due, but only 2 fit in today
+  await call('/api/review/answer', { sentenceId: first.json.item.id, answer: 'my answer' });
+  assert.equal((await call('/api/next')).json.left, 1);
+  await call('/api/review/answer', { sentenceId: 2, answer: 'my answer' });
+  const done = await call('/api/next');
+  assert.equal(done.json.kind, 'done');
+  assert.equal(done.json.waiting, 3);
 });

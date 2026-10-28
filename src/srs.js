@@ -18,10 +18,11 @@ function addDays(day, n) {
 /**
  * Next state after a review.
  * Correct answer: move up one box (capped); wrong answer: back to box 1.
+ * Correct in the top box: the sentence is retired and stops coming back.
  */
 function nextState(box, correct, today) {
   const nextBox = correct ? Math.min(box + 1, MAX_BOX) : 1;
-  return { box: nextBox, nextReview: addDays(today, INTERVALS[nextBox - 1]) };
+  return { box: nextBox, nextReview: addDays(today, INTERVALS[nextBox - 1]), retired: correct && box >= MAX_BOX };
 }
 
 module.exports = { INTERVALS, MAX_BOX, perthDay, addDays, nextState };

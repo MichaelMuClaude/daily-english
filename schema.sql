@@ -51,6 +51,10 @@ CREATE INDEX ix_user_sentences_due ON dbo.user_sentences (user_id, next_review);
 IF COL_LENGTH('dbo.sentences', 'explain') IS NULL
 ALTER TABLE dbo.sentences ADD explain NVARCHAR(MAX) NULL;
 
+-- A sentence is retired once it has been answered correctly in the top box: it stops coming back.
+IF COL_LENGTH('dbo.user_sentences', 'retired') IS NULL
+ALTER TABLE dbo.user_sentences ADD retired BIT NOT NULL CONSTRAINT df_user_sentences_retired DEFAULT 0;
+
 -- Cached MP3 of the sentence read by the cloud neural voice (generated once, on first Listen)
 IF COL_LENGTH('dbo.sentences', 'audio') IS NULL
 ALTER TABLE dbo.sentences ADD audio VARBINARY(MAX) NULL;

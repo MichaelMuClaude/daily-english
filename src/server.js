@@ -6,9 +6,10 @@ const { parseExplain } = require('./explain');
 
 const MAX_ANSWER_LEN = 300;
 const JUDGE_LIMIT_PER_HOUR = 40; // cost guard: each judged answer is one LLM call
+const DAILY_REVIEW_CAP = 10; // most reviews shown per Perth day, most overdue first; the rest wait for tomorrow
 const SPEAK_LIMIT_PER_HOUR = 30; // cost guard: each NEW voice recording is one Speech call (replays come from the database)
 
-function createApp({ repo, llm, news, speech, now = () => new Date() }) {
+function createApp({ repo, llm, news, speech, now = () => new Date(), reviewCap = DAILY_REVIEW_CAP }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '4kb' }));
@@ -98,12 +99,17 @@ function createApp({ repo, llm, news, speech, now = () => new Date() }) {
         sentence: shape(fresh[0]),
       });
     }
-    const [item, due] = await Promise.all([repo.nextDue(req.userId, today), repo.dueCount(req.userId, today)]);
-    if (item) return res.json({ kind: 'review', learnedTotal, left: due, item: { id: item.id, chinese: item.chinese } });
-    if (!rows.length) {
+    const [item, due, doneToday] = await Promise.all([
+      repo.nextDue(req.userId, today), repo.dueCount(req.userId, today), repo.reviewedToday(req.userId, today),
+    ]);
+    const room = Math.max(0, reviewCap - doneToday);
+    if (item && room > 0) {
+      return res.json({ kind: 'review', learnedTotal, left: Math.min(due, room), item: { id: item.id, chinese: item.chinese } });
+    }
+    if (!rows.length && !item) {
       return res.status(503).json({ error: "Today's sentences are not ready yet. Please try again in a minute." });
     }
-    res.json({ kind: 'done', learnedTotal });
+    res.json({ kind: 'done', learnedTotal, ...(due > 0 ? { waiting: due } : {}) });
   }));
 
   // The sentence read aloud by the cloud neural voice. Generated once, then served from the database.

@@ -178,7 +178,7 @@ function renderReview(data) {
 }
 
 // ---------- finished ----------
-function renderDone() {
+function renderDone(data = {}) {
   setProgress(null);
   setPrimary(null);
   const c = el('section', 'card done');
@@ -190,6 +190,7 @@ function renderDone() {
     el('p', 'en', 'All done for today'),
     el('p', 'zh', parts.length ? `${parts.join(' · ')}. See you tomorrow!` : 'Nothing to review yet. See you tomorrow!'),
   );
+  if (data.waiting) c.append(el('p', 'zh', `${data.waiting} more review${data.waiting === 1 ? ' is' : 's are'} waiting for tomorrow.`));
   show(c);
 }
 
@@ -202,7 +203,7 @@ async function load() {
     setTotal(data.learnedTotal);
     if (data.kind === 'learn') renderLearn(data);
     else if (data.kind === 'review') renderReview(data);
-    else renderDone();
+    else renderDone(data);
   } catch (e) { showError(e.message); }
 }
 

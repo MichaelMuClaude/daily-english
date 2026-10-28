@@ -96,7 +96,18 @@ async function markLearned(userId, sentenceId, today) {
 
 async function dueCount(userId, today) {
   const r = await query(
-    'SELECT COUNT(*) AS n FROM dbo.user_sentences WHERE user_id = @u AND next_review <= @today',
+    'SELECT COUNT(*) AS n FROM dbo.user_sentences WHERE user_id = @u AND retired = 0 AND next_review <= @today',
+    { u: [sql.Int, userId], today: [sql.Date, today] },
+  );
+  return r.recordset[0].n;
+}
+
+/** How many different sentences this user has answered today (Perth day): counts against the daily cap. */
+async function reviewedToday(userId, today) {
+  const r = await query(
+    `SELECT COUNT(DISTINCT sentence_id) AS n FROM dbo.reviews
+     WHERE user_id = @u
+       AND CAST((reviewed_at AT TIME ZONE 'UTC') AT TIME ZONE 'W. Australia Standard Time' AS DATE) = @today`,
     { u: [sql.Int, userId], today: [sql.Date, today] },
   );
   return r.recordset[0].n;
@@ -107,7 +118,7 @@ async function nextDue(userId, today) {
   const r = await query(
     `SELECT TOP 1 s.id, s.chinese
      FROM dbo.user_sentences us JOIN dbo.sentences s ON s.id = us.sentence_id
-     WHERE us.user_id = @u AND us.next_review <= @today
+     WHERE us.user_id = @u AND us.retired = 0 AND us.next_review <= @today
      ORDER BY us.next_review, us.learned_at`,
     { u: [sql.Int, userId], today: [sql.Date, today] },
   );
@@ -126,11 +137,11 @@ async function learnedSentence(userId, sentenceId) {
 }
 
 async function recordReview(userId, sentence, answer, judgement, today) {
-  const { box, nextReview } = nextState(sentence.box, judgement.correct, today);
+  const { box, nextReview, retired } = nextState(sentence.box, judgement.correct, today);
   await query(
     `INSERT dbo.reviews (user_id, sentence_id, answer, score, correct, feedback)
      VALUES (@u, @s, @answer, @score, @correct, @feedback);
-     UPDATE dbo.user_sentences SET box = @box, next_review = @next WHERE user_id = @u AND sentence_id = @s;`,
+     UPDATE dbo.user_sentences SET box = @box, next_review = @next, retired = @retired WHERE user_id = @u AND sentence_id = @s;`,
     {
       u: [sql.Int, userId],
       s: [sql.Int, sentence.id],
@@ -140,9 +151,10 @@ async function recordReview(userId, sentence, answer, judgement, today) {
       feedback: [sql.NVarChar(1000), judgement.feedback],
       box: [sql.TinyInt, box],
       next: [sql.Date, nextReview],
+      retired: [sql.Bit, retired],
     },
   );
-  return { box, nextReview };
+  return { box, nextReview, retired };
 }
 
 async function stats(userId) {
@@ -157,5 +169,5 @@ async function stats(userId) {
 
 module.exports = {
   sentenceForAudio, saveAudio, learnedCount, upsertUser, sentencesForDay, saveSentences, learnedIds, markLearned,
-  dueCount, nextDue, learnedSentence, recordReview, stats,
+  dueCount, reviewedToday, nextDue, learnedSentence, recordReview, stats,
 };
